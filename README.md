@@ -214,6 +214,8 @@ the wire encoding.
 | Outbound | `EslActuationPort` | Expressing a task at the shelf edge, with graceful degradation |
 | Outbound | `FacingRepositoryPort` | Loading and storing facing aggregates, partition-scoped |
 | Outbound | `IngestionLedgerPort` | The stored state behind the idempotency guarantee |
+| Outbound | `EventStreamConsumerPort` | The stream the five detection producers publish to |
+| Outbound | `DeadLetterSinkPort` | Where records that cannot become detection events are set aside |
 
 ### Detection ingestion
 
@@ -357,6 +359,59 @@ measured, and still publishes the figure with the shortfalls attached: withholdi
 computation into somebody's spreadsheet without the caveat. `compareToBaseline` will not compute a
 lift against a prior that was never established.
 
+## Adapters — consuming the detection stream
+
+`src/adapters/inbound/detection-stream/`
+
+The outermost ring, and the only layer allowed to know a producer's field names, a vendor's enum
+spellings or a broker's record shape. **This layer adapts to upstream producers**: each of the five
+keeps its own dialect, and nothing is asked of any of them.
+
+| Source | Topic | Producer version marker | What the adapter absorbs |
+| --- | --- | --- | --- |
+| `shopper_scan` | `osa.detections.shopper_scan` | `type` + `v` | One item per event, wrapped into the port's array shape; `REPLACED` → `substituted` |
+| `arpalus_detection` | `osa.detections.arpalus_detection` | `schema` URN | `void_pct` (0–100) → a ratio; site nested under `site` |
+| `caper_frame` | `osa.detections.caper_frame` | `eventType` + `version` | Epoch millis → `Instant`; `gapWidthMm` → centimetres |
+| `carrot_tag_label` | `osa.detections.carrot_tag_label` | `proto` | Status and lamp codes → domain enums; `"5.99"` → 599 cents; a derived event id |
+| `pos_movement` | `osa.detections.pos_movement` | `feed` + `feedVersion` | A start/end window → a duration observed at its *close* |
+
+One topic per source rather than a shared topic with a discriminator: a vendor shipping a bad build
+then poisons only its own topic and its own consumer lag. `DETECTION_SOURCE_ADAPTERS` is a mapped
+type over `DetectionSource`, so a sixth source is a compile error until someone writes its adapter,
+rather than a topic nobody notices is unsubscribed.
+
+The unit conversions are the ones worth naming, because in each case the unconverted value is still a
+*valid* number and fails silently: an unconverted 33.5% void reads as a void ratio of 33.5, far past
+the 0.7 threshold, and empties a two-thirds-full shelf.
+
+### Nothing in a payload can stop the consumer
+
+Every failure that is a property of the data — unreadable bytes, bad JSON, an unknown producer
+version, a missing field, a partition key disagreeing with the envelope, a rejection ingestion will
+repeat on every retry — produces a dead letter and a disposition, never a throw. Five vendors on five
+release cadences publish here, and one of them shipping a bad build must cost that vendor its own
+dead-letter queue rather than costing every retailer their shelf detections. Only infrastructure
+failures propagate, and those leave the batch uncommitted for redelivery, which is safe because
+ingestion is idempotent.
+
+Versions are checked *before* any field is read. Reading fields out of a payload whose version is
+unrecognised is guessing, and guessing at the boundary is how a renamed field becomes a wrong shelf
+state. A dead letter keeps the payload verbatim and names the offending field path — the audience is
+the vendor engineer who has to reproduce it.
+
+**Commit watermark.** `commitThrough` stops at the first record needing a retry, and rate limiting is
+the only rejection that qualifies: it is the one a later attempt can turn into an acceptance. Every
+other rejection is a fact about the event, and retrying it forever would wedge the partition behind
+one bad message.
+
+### The partition survives the whole trip
+
+Producers publish keyed by `retailerId`, so a retailer's events occupy one broker partition and
+arrive in order. The consumer does not merely inherit that: it checks each decoded envelope against
+the record's key — honouring either over the other would put one retailer's shelf data in another's
+partition — and it groups decoded events by `retailerId` before calling ingestion, so every
+`DetectionEventBatch` it submits is single-partition by construction.
+
 ## Retailer partitioning
 
 `retailerId` is a first-class field on every entity — facing, history, event, signal, task, lane map,
@@ -366,6 +421,11 @@ capabilities, and audit export scopes and artifacts.
 Isolation is a modelling invariant rather than a query-time filter: there is no path in the domain
 that pools data across retailers, so `assertSameRetailer` throws `CrossRetailerAccessError` instead
 of quietly producing a wrong aggregate.
+
+The invariant starts at the broker, not at the repository. Producers key the stream by `retailerId`,
+the consumer rejects any record whose key and envelope disagree, and it groups by partition before
+submitting — so the first thing data does on entering this process is prove which retailer it belongs
+to, and nothing downstream has to take that on trust.
 
 ## Conventions
 
@@ -389,8 +449,11 @@ src/domain/gap/           detected gaps and their ranking
 src/domain/audit/         audit log entities
 src/ports/common/         paging, shared schema-versioning contract
 src/ports/inbound/        detection ingestion, reporting/query, audit export
-src/ports/outbound/       ESL actuation, facing repository, ingestion ledger
+src/ports/outbound/       ESL actuation, facing repository, ingestion ledger, event stream,
+                          dead-letter sink
 src/application/          signal normalization, ingestion, gap ranking, task dispatch,
                           verification loop, outcome metrics, availability baseline
-tests/                    unit tests (228), fixtures and in-memory ports under tests/support
+src/adapters/inbound/     event-stream consumers and the five per-source payload adapters
+tests/                    unit and integration tests (266), fixtures, in-memory ports and
+                          producer payloads under tests/support
 ```

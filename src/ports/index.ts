@@ -13,6 +13,8 @@
  * Outbound (driven) — what this service asks of the outside world:
  *  - `EslActuationPort`  expressing a task at the shelf edge
  *  - `FacingRepositoryPort` / `IngestionLedgerPort`  the state the use cases fold over
+ *  - `EventStreamConsumerPort`  the stream the detection producers publish to
+ *  - `DeadLetterSinkPort`  where records that cannot become detection events are set aside
  */
 export * from './common/paging.js';
 export * from './common/schema-contract.js';
@@ -24,3 +26,5 @@ export * from './inbound/audit-export.port.js';
 export * from './outbound/esl-actuation.port.js';
 export * from './outbound/facing-repository.port.js';
 export * from './outbound/ingestion-ledger.port.js';
+export * from './outbound/event-stream.port.js';
+export * from './outbound/dead-letter.port.js';

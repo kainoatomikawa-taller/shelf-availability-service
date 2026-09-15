@@ -33,3 +33,5 @@ export * from './domain/audit/audit-log.js';
 export * from './ports/index.js';
 
 export * from './application/index.js';
+
+export * from './adapters/index.js';
