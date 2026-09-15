@@ -12,6 +12,7 @@
  *
  * Outbound (driven) — what this service asks of the outside world:
  *  - `EslActuationPort`  expressing a task at the shelf edge
+ *  - `FacingRepositoryPort` / `IngestionLedgerPort`  the state the use cases fold over
  */
 export * from './common/paging.js';
 export * from './common/schema-contract.js';
@@ -21,3 +22,5 @@ export * from './inbound/reporting.port.js';
 export * from './inbound/audit-export.port.js';
 
 export * from './outbound/esl-actuation.port.js';
+export * from './outbound/facing-repository.port.js';
+export * from './outbound/ingestion-ledger.port.js';

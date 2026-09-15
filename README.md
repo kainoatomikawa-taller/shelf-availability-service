@@ -4,8 +4,9 @@ This project turns Instacart’s existing shelf detection technology into a clos
 
 This repository currently contains the **domain substrate** — the facing-level model, its
 time-ordered event history, the typed task lifecycle, the Carrot Tags LED lane mapping, the
-availability index and the verification rule, all as pure, dependency-free domain logic — and the
-**hexagonal boundary** of ports around it.
+availability index, the verification rule, and the gap ranking that decides what gets worked first,
+all as pure, dependency-free domain logic — the **hexagonal boundary** of ports around it, and the
+**application layer** that drives one across the other.
 
 ```
 npm install
@@ -18,6 +19,8 @@ npm run build       # emits dist/
 
 ```
 signal (×6 sources) ──▶ Facing ──▶ FacingStateEvent ──▶ Task ──▶ VerificationPass ──▶ verified
+                          │  │                                                           │
+                          │  └──▶ DetectedGap ──▶ RankedGap (department × velocity × revisit density)
                           │                                                              │
                           └──────────────▶ AvailabilityIndex            AuditLogEntry ◀──┘
 ```
@@ -128,6 +131,60 @@ retailer can tighten it without forking the evaluator. The decisions worth namin
 - Two passes sharing an instant are not independent looks at the shelf. Duplicate `passId`s are
   deduplicated first, since redelivery is normal at the ingestion edge.
 
+### Gaps and their ranking
+
+`src/domain/gap/gap.ts`, `src/domain/gap/ranking.ts`, `src/domain/merchandising/`
+
+The three things the loop finds wrong at a facing — an **availability gap**, a **price mismatch**,
+a **planogram drift** — are one union rather than three pipelines, because they compete for the same
+scarce resource: an employee's next ten minutes. `detectGaps` reads them off the aggregate as it
+stands and never re-interprets signals, so a gap cannot disagree with the history it came from. A
+delisted facing raises no drift: the slot is *supposed* to look wrong.
+
+```
+score = departmentWeight × kindWeight × salesVelocityUnitsPerDay × evidenceFactor
+evidenceFactor = density / (density + threshold)
+```
+
+Department weights are configuration with a neutral default — one banner's "fresh" is another's four
+departments, and a shipped table of names would be wrong everywhere it was not written. Sales
+velocity is read off the POS window in units per day; when the feed is silent the gap is scored on
+the policy's assumption and flagged `assumed` rather than handed an invented rate. Every term comes
+back in `components`, because a store manager who disagrees with the order needs to see which factor
+put a gap where it is.
+
+`evidenceFactor` saturates: zero coverage contributes nothing, a category on the service-level floor
+scores 0.5, one swept six times a day scores 0.75, and it never reaches 1 — so no amount of camera
+traffic lets a slow seller outrank a fast one on coverage alone. The gap has already been detected,
+so density is not about finding it; it is how fresh the evidence is and how fast the loop can close.
+
+Ties break on gap age, then on gap id, so a re-run never reshuffles the list under a picker's hands.
+
+### Revisit density and service-level scope
+
+`src/domain/merchandising/revisit-density.ts`, `service-level.ts`
+
+```
+revisit density = passes / (facings × days)
+```
+
+Per facing *and* per day: passes-per-day alone rewards a category for being big, passes-per-facing
+alone rewards a longer window. The denominator is **every facing in the category**, not every facing
+that happened to be passed — a category where one facing of four hundred is swept twelve times a day
+is not covered, and dividing by the facings we saw would score it as if it were. Measured per store,
+never per chain: a well-swept flagship must not carry a store nobody walks.
+
+**The floor is fixed at two passes per facing per day** and is deliberately not a retailer tuning
+knob. It follows from what the loop physically needs: the verification rule closes a task on two
+consecutive clean passes within 24 hours, so a category passed less than twice a day cannot, on
+average, produce the evidence that closes a single task inside a day. Committing to a service level
+there would be selling a loop that cannot close.
+
+Categories below the floor are excluded from the *commitment*, not from the service: `rankGaps`
+returns them in `excluded`, ranked among themselves, with the density they managed and the density
+required. An unmeasured category is reported as `unmeasured` rather than as a failure — absence of
+evidence must never read as qualification, and a retailer needs to know which of the two happened.
+
 ### Audit log
 
 `src/domain/audit/audit-log.ts`
@@ -150,6 +207,8 @@ the wire encoding.
 | Inbound | `TaskPerformanceQueryPort` | Task work rate, resolved-gap rate, detection-to-resolution latency |
 | Inbound | `AuditExportPort` | Attestable export of the retained facing-state event log |
 | Outbound | `EslActuationPort` | Expressing a task at the shelf edge, with graceful degradation |
+| Outbound | `FacingRepositoryPort` | Loading and storing facing aggregates, partition-scoped |
+| Outbound | `IngestionLedgerPort` | The stored state behind the idempotency guarantee |
 
 ### Detection ingestion
 
@@ -224,6 +283,36 @@ cannot tell whether the service or the export is wrong. `sealArtifact` returns a
 content hash and a retrieval handle; the body is fetched separately, since a period-length export
 across a full estate will not fit in a response.
 
+## Application layer
+
+`src/application/`
+
+Thin by design. Everything that decides what a signal *means*, what a transition *is*, or what a gap
+is *worth* lives in the domain; what lives here is the sequencing between the ports and that logic.
+
+**`normalizeDetectionEvent`** is the one place the published wire schema and the internal model know
+about each other — both are written out independently so the contract cannot shift under a domain
+refactor, and this is the seam where that independence is paid for. The switch is over the event
+rather than a bare source string, so each branch narrows to the observations that source is
+contracted to send and a sixth detection source is a compile error rather than a field that quietly
+never arrives. `observedAt` comes from the envelope: one Arpalus pass saw every facing in the bay at
+the same instant, and per-observation timestamps would invite sub-frame precision nobody has.
+
+**`DetectionIngestionService`** implements `DetectionIngestionPort`. It loads every facing an event
+touches *before* applying any of it — one event is one decision about a bay, and half-applying it
+would leave a history no replay of the stream can reproduce. The idempotency ledger is written
+*after* the aggregates: a crash in between replays the event, and a replay is a no-op the domain
+already handles, since history records transitions only. Recording first would trade that harmless
+repeat for a silently dropped observation. Batches are processed sequentially, because events in one
+batch routinely touch the same facing.
+
+**`rankGapsForWindow`** measures revisit density from the pass stream rather than accepting it as an
+input. That is the point of the use case: the scope a retailer is held to has to follow from traffic
+that actually happened, not from a number somebody typed into a config table and never revisited. It
+returns the committed worklist, the excluded gaps, the per-department cut and the coverage behind all
+of it. Pure — no clock, no IO — so the same call ranks a live store, replays last Tuesday, or
+back-tests a different threshold.
+
 ## Retailer partitioning
 
 `retailerId` is a first-class field on every entity — facing, history, event, signal, task, lane map,
@@ -251,9 +340,12 @@ src/domain/common/        brands, ids, time, errors, partition guard, Result
 src/domain/facing/        shelf state, six signal sources, interpretation, event history, aggregate
 src/domain/task/          task types, LED colour lanes, typed lifecycle states, task entity
 src/domain/availability/  availability index, verification rule
+src/domain/merchandising/ department/category, revisit density, service-level floor, sales velocity
+src/domain/gap/           detected gaps and their ranking
 src/domain/audit/         audit log entities
 src/ports/common/         paging, shared schema-versioning contract
 src/ports/inbound/        detection ingestion, reporting/query, audit export
-src/ports/outbound/       ESL actuation
-tests/                    unit tests (121), fixtures under tests/support
+src/ports/outbound/       ESL actuation, facing repository, ingestion ledger
+src/application/          signal normalization, ingestion service, gap ranking use case
+tests/                    unit tests (179), fixtures and in-memory ports under tests/support
 ```
