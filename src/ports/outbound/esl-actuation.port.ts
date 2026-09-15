@@ -155,7 +155,13 @@ export type EslUnavailableReason =
   | 'rate_limited'
   /** Nothing on the ladder is supported by this fleet — route the task elsewhere. */
   | 'no_supported_mode'
-  | 'store_not_onboarded';
+  | 'store_not_onboarded'
+  /**
+   * The expression being refreshed is unknown or its lease already lapsed, so
+   * the tag is dark. Distinct from the hardware reasons above because retrying
+   * the refresh cannot help: the caller has to express the task again.
+   */
+  | 'expression_expired';
 
 export type EslActuationResult =
   | {

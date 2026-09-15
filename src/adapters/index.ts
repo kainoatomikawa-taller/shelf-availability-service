@@ -9,5 +9,15 @@
  *
  * Driving (inbound) — the outside world calling in:
  *  - `detection-stream/`  event-stream consumers for the five detection producers
+ *
+ * Driven (outbound) — this service calling out:
+ *  - `esl/`  actuation adapters for the five shelf-edge fleets
+ *
+ * Read side — `reporting/` implements both inbound read ports over one retained
+ * read model. It is filed on its own rather than under `inbound/` because it does
+ * not call a port, it *is* the implementation behind two of them, and reads a
+ * store to answer: an adapter on both edges of the hexagon at once.
  */
 export * from './inbound/detection-stream/index.js';
+export * from './outbound/esl/index.js';
+export * from './reporting/index.js';

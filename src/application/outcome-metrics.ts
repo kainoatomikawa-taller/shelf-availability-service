@@ -37,6 +37,8 @@ import type {
   ReportGranularity,
   ResolvedGapRatePoint,
   ResolvedGapRateReport,
+  TaskWorkRatePoint,
+  TaskWorkRateReport,
 } from '../ports/inbound/reporting.port.js';
 
 /**
@@ -331,6 +333,16 @@ export interface OutcomeMetricsInput {
   /** Defaults to a department cut — the one a store manager acts on. */
   readonly breakdownBy?: readonly OutcomeDimension[];
   readonly rule?: VerificationRule;
+  /**
+   * Labour hours the retailer's workforce feed reported for a bucket, or `null`
+   * when that feed is not connected.
+   *
+   * A function of the bucket rather than one figure for the period, because a
+   * per-labour-hour rate computed by spreading a week's payroll evenly over its
+   * hours would say a store was equally staffed at 3am and at Saturday lunchtime.
+   * The service never estimates it: no feed means `null`, not a guess.
+   */
+  readonly labourHoursFor?: (window: TimeWindow) => number | null;
 }
 
 const DEFAULT_DIMENSIONS: readonly OutcomeDimension[] = ['department'];
@@ -483,7 +495,84 @@ export function computeResolvedGapRate(input: OutcomeMetricsInput): ResolvedGapR
   };
 }
 
+// ---------------------------------------------------------------------------
+// Task work rate
+// ---------------------------------------------------------------------------
+
+/**
+ * Task throughput for one bucket of the detection cohort.
+ *
+ * Cohorted by detection, exactly like the other two reports, and that is the
+ * decision worth defending. Counting "tasks verified this week" against "tasks
+ * created this week" is two populations and a completion rate that can exceed one
+ * whenever a busy week follows a quiet one. Asking instead "of the gaps we found
+ * in this bucket, how many got raised, worked and closed" gives a figure that
+ * means something on its own and can be compared week to week.
+ *
+ * `outstanding` follows from that: cohort members that were tasked and have not
+ * reached a terminal state — still open work from the gaps found in this bucket.
+ */
+export function taskWorkRatePoint(
+  records: readonly LoopOutcomeRecord[],
+  window: TimeWindow,
+  labourHours: number | null,
+): TaskWorkRatePoint {
+  const created = records.filter((record) => record.taskCreatedAt !== null).length;
+  const resolved = records.filter((record) => record.resolvedAt !== null).length;
+  const verified = records.filter((record) => record.verifiedAt !== null).length;
+  const reopened = records.reduce((total, record) => total + record.reopenCount, 0);
+
+  return {
+    window,
+    created,
+    assigned: records.filter((record) => record.assignedAt !== null).length,
+    acknowledged: records.filter((record) => record.acknowledgedAt !== null).length,
+    resolved,
+    verified,
+    reopened,
+    cancelled: records.filter((record) => record.terminal === 'cancelled').length,
+    expired: records.filter((record) => record.terminal === 'expired').length,
+    outstanding: records.filter((record) => record.taskId !== null && record.terminal === null)
+      .length,
+    labourHours,
+    // Zero labour hours is not a divide-by-zero to be defended against, it is a
+    // store that reported no staff; the rate is undefined either way.
+    tasksPerLabourHour: labourHours === null || labourHours <= 0 ? null : verified / labourHours,
+    completionRate: ratio(verified, created),
+    reworkRate: ratio(reopened, resolved),
+  };
+}
+
+/**
+ * Task throughput, completion and rework, with the per-labour-hour rate when the
+ * retailer's workforce feed is connected.
+ *
+ * Breakdown slices carry `labourHours: null` on purpose: payroll arrives per
+ * store and per period, not per department, and splitting it pro rata across
+ * departments would manufacture a productivity figure for a team whose hours
+ * nobody actually reported.
+ */
+export function computeTaskWorkRate(input: OutcomeMetricsInput): TaskWorkRateReport {
+  const labourHoursFor = input.labourHoursFor ?? (() => null);
+  const overallRecords = cohort(input, input.window);
+
+  return {
+    retailerId: input.retailerId,
+    window: input.window,
+    granularity: input.granularity,
+    overall: taskWorkRatePoint(overallRecords, input.window, labourHoursFor(input.window)),
+    series: bucketsFor(input.window, input.granularity).map((bucket) =>
+      taskWorkRatePoint(cohort(input, bucket), bucket, labourHoursFor(bucket)),
+    ),
+    breakdowns: breakdownsOf(overallRecords, input.breakdownBy ?? DEFAULT_DIMENSIONS, (slice) =>
+      taskWorkRatePoint(slice, input.window, null),
+    ),
+    computedAt: input.computedAt,
+  };
+}
+
 export interface OutcomeMetrics {
+  readonly taskWorkRate: TaskWorkRateReport;
   readonly detectionToResolution: DetectionToResolutionReport;
   readonly resolvedGapRate: ResolvedGapRateReport;
 }
@@ -494,6 +583,7 @@ export interface OutcomeMetrics {
  * the loop produced rather than a second implementation of them.
  */
 export const computeOutcomeMetrics = (input: OutcomeMetricsInput): OutcomeMetrics => ({
+  taskWorkRate: computeTaskWorkRate(input),
   detectionToResolution: computeDetectionToResolution(input),
   resolvedGapRate: computeResolvedGapRate(input),
 });
