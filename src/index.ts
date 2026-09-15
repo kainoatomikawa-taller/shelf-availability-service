@@ -35,3 +35,5 @@ export * from './ports/index.js';
 export * from './application/index.js';
 
 export * from './adapters/index.js';
+
+export * from './platform/index.js';

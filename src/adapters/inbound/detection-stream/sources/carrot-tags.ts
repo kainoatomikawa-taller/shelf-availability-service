@@ -7,7 +7,6 @@ import type {
   DetectionEventOf,
 } from '../../../../ports/inbound/detection-ingestion.port.js';
 import { envelopeFrom, type DecodeContext, type SourceAdapter } from '../source-adapter.js';
-import { detectionTopic } from '../topics.js';
 import {
   WireViolationError,
   decimalAsCents,
@@ -80,7 +79,6 @@ const LAMPS: Readonly<Record<string, LedColor | null>> = {
  */
 export const carrotTagsAdapter: SourceAdapter<'carrot_tag_label'> = {
   source: 'carrot_tag_label',
-  topic: detectionTopic('carrot_tag_label'),
   supportedWireVersions: ['carrot/3'],
 
   wireVersion(payload: unknown): string | null {

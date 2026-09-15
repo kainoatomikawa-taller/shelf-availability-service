@@ -3,7 +3,6 @@ import { elapsed, toISO } from '../../../../domain/common/time.js';
 import { CERTAIN } from '../../../../domain/facing/signals.js';
 import type { DetectionEventOf } from '../../../../ports/inbound/detection-ingestion.port.js';
 import { envelopeFrom, type DecodeContext, type SourceAdapter } from '../source-adapter.js';
-import { detectionTopic } from '../topics.js';
 import {
   WireViolationError,
   isoInstant,
@@ -51,7 +50,6 @@ import {
  */
 export const posMovementAdapter: SourceAdapter<'pos_movement'> = {
   source: 'pos_movement',
-  topic: detectionTopic('pos_movement'),
   supportedWireVersions: ['pos.movement@2024-06'],
 
   wireVersion(payload: unknown): string | null {

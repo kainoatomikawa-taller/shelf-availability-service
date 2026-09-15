@@ -4,7 +4,6 @@ import type {
   ShopperScanObservation,
 } from '../../../../ports/inbound/detection-ingestion.port.js';
 import { envelopeFrom, type DecodeContext, type SourceAdapter } from '../source-adapter.js';
-import { detectionTopic } from '../topics.js';
 import {
   int,
   isoInstant,
@@ -52,7 +51,6 @@ const SCAN_RESULTS: Readonly<Record<string, ShopperScanObservation['outcome']>> 
  */
 export const shopperScanAdapter: SourceAdapter<'shopper_scan'> = {
   source: 'shopper_scan',
-  topic: detectionTopic('shopper_scan'),
   supportedWireVersions: ['pick.item_scan.v3'],
 
   wireVersion(payload: unknown): string | null {

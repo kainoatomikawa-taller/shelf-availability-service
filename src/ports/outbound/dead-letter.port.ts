@@ -26,6 +26,16 @@ export type DeadLetterReason =
   | 'schema_violation'
   /** The broker's partition key and the envelope's `retailerId` disagree. */
   | 'partition_key_mismatch'
+  /**
+   * The envelope names a retailer other than the one whose topic it arrived on.
+   *
+   * Distinct from `partition_key_mismatch` because the two send their producer's
+   * owner after different fixes: a key mismatch is a partitioner bug inside one
+   * tenant's publisher, whereas this is a credential or routing table pointed at
+   * the wrong tenant's namespace — the more serious of the two, and the one that
+   * would have been a cross-tenant leak had it not been refused.
+   */
+  | 'topic_retailer_mismatch'
   /** Decoded cleanly, and the ingestion use case refused it for a reason retrying cannot fix. */
   | 'rejected_by_ingestion';
 

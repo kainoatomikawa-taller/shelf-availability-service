@@ -1,7 +1,6 @@
 import { facingId, productId, retailerId, storeId } from '../../../../domain/common/ids.js';
 import type { DetectionEventOf } from '../../../../ports/inbound/detection-ingestion.port.js';
 import { envelopeFrom, type DecodeContext, type SourceAdapter } from '../source-adapter.js';
-import { detectionTopic } from '../topics.js';
 import {
   bool,
   epochMillisInstant,
@@ -47,7 +46,6 @@ import {
  */
 export const caperAdapter: SourceAdapter<'caper_frame'> = {
   source: 'caper_frame',
-  topic: detectionTopic('caper_frame'),
   supportedWireVersions: ['caper.frame.v1'],
 
   wireVersion(payload: unknown): string | null {

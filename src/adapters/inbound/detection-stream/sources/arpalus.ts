@@ -1,7 +1,6 @@
 import { facingId, productId, retailerId, storeId } from '../../../../domain/common/ids.js';
 import type { DetectionEventOf } from '../../../../ports/inbound/detection-ingestion.port.js';
 import { envelopeFrom, type DecodeContext, type SourceAdapter } from '../source-adapter.js';
-import { detectionTopic } from '../topics.js';
 import {
   isoInstant,
   obj,
@@ -45,7 +44,6 @@ import {
  */
 export const arpalusAdapter: SourceAdapter<'arpalus_detection'> = {
   source: 'arpalus_detection',
-  topic: detectionTopic('arpalus_detection'),
   supportedWireVersions: ['arpalus.shelf-scan.v2'],
 
   wireVersion(payload: unknown): string | null {

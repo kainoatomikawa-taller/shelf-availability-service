@@ -22,8 +22,9 @@ import type {
   StreamRecord,
   StreamSubscription,
 } from '../../../ports/outbound/event-stream.port.js';
-import { ALL_SOURCE_ADAPTERS } from './registry.js';
+import { DETECTION_SOURCE_ADAPTERS } from './registry.js';
 import type { AnySourceAdapter } from './source-adapter.js';
+import type { DetectionSubscription } from './topics.js';
 import { isPlainObject, WireViolationError } from './wire.js';
 
 /**
@@ -52,12 +53,19 @@ import { isPlainObject, WireViolationError } from './wire.js';
  *
  * ### The retailer partition survives the whole trip
  *
- * Producers publish keyed by `retailerId`, so a retailer's events occupy one
- * broker partition and arrive in order. The consumer does not merely inherit that:
- * it checks each decoded envelope against the record's key, and it groups decoded
- * events by `retailerId` before calling ingestion, so every `DetectionEventBatch`
- * it submits is single-partition by construction — the same invariant the domain
- * enforces internally, asserted at the point the data enters the process.
+ * Detection topics are per retailer and per source, and within a retailer's topic
+ * producers publish keyed by `retailerId`, so a retailer's events occupy one
+ * broker partition and arrive in order. The consumer does not merely inherit
+ * that. It checks the decoded envelope against two independent statements of
+ * which retailer this is — the topic the record arrived on, which the deployment
+ * fixed, and the key the producer chose — and it groups decoded events by
+ * `retailerId` before calling ingestion, so every `DetectionEventBatch` it
+ * submits is single-partition by construction.
+ *
+ * Three agreeing sources rather than one is the point: each of them can be got
+ * wrong on its own — a misconfigured credential, a partitioner bug, a copied
+ * payload — and each failure alone is caught here rather than becoming one
+ * retailer's shelf data inside another's partition.
  */
 
 /** What became of one stream record. */
@@ -105,7 +113,20 @@ export interface DetectionStreamConsumerDependencies {
   readonly deadLetters: DeadLetterSinkPort;
   /** The platform clock, injected like everywhere else in this codebase. */
   readonly now: () => Instant;
-  /** Defaults to the five shipped source adapters; narrowed in tests. */
+  /**
+   * Every topic this consumer reads, with the source published on it and the one
+   * retailer it belongs to.
+   *
+   * Supplied by the composition root from the tenant registry rather than
+   * derived here, so onboarding a retailer is a deployment change and this class
+   * has no opinion about how many there are. Two subscriptions naming the same
+   * topic is a wiring bug, and rejected as one.
+   */
+  readonly subscriptions: readonly DetectionSubscription[];
+  /**
+   * Overrides the shipped source adapters, keyed by source. Test seam; in a
+   * deployment the five in `DETECTION_SOURCE_ADAPTERS` are what run.
+   */
   readonly adapters?: readonly AnySourceAdapter[];
 }
 
@@ -182,16 +203,49 @@ const deadLetterOf = (
   failedAt,
 });
 
-export class DetectionStreamConsumer {
-  private readonly adapters: ReadonlyMap<string, AnySourceAdapter>;
+/** A subscription resolved against the adapter that reads the source on it. */
+interface BoundTopic {
+  readonly subscription: DetectionSubscription;
+  readonly adapter: AnySourceAdapter;
+}
 
-  /** Every topic this consumer subscribes to — one per detection source. */
+export class DetectionStreamConsumer {
+  private readonly bindings: ReadonlyMap<string, BoundTopic>;
+
+  /** Every topic this consumer subscribes to — one per retailer, per source. */
   readonly topics: readonly string[];
 
   constructor(private readonly deps: DetectionStreamConsumerDependencies) {
-    const adapters = deps.adapters ?? ALL_SOURCE_ADAPTERS;
-    this.adapters = new Map(adapters.map((adapter) => [adapter.topic, adapter]));
-    this.topics = [...this.adapters.keys()];
+    const bySource = new Map<string, AnySourceAdapter>(
+      (deps.adapters ?? Object.values(DETECTION_SOURCE_ADAPTERS)).map((adapter) => [
+        adapter.source,
+        adapter,
+      ]),
+    );
+
+    const bindings = new Map<string, BoundTopic>();
+    for (const subscription of deps.subscriptions) {
+      const adapter = bySource.get(subscription.source);
+      // Both of these are wiring errors, and wiring errors are the one class of
+      // problem this consumer is allowed to die on: they are settled before a
+      // single record is read, and starting anyway would mean silently not
+      // consuming a topic a retailer is already publishing to.
+      if (adapter === undefined) {
+        throw new Error(
+          `no source adapter for "${subscription.source}" on topic "${subscription.topic}"`,
+        );
+      }
+      const existing = bindings.get(subscription.topic);
+      if (existing !== undefined) {
+        throw new Error(
+          `topic "${subscription.topic}" is subscribed twice, for retailers "${existing.subscription.retailerId}" and "${subscription.retailerId}"`,
+        );
+      }
+      bindings.set(subscription.topic, { subscription, adapter });
+    }
+
+    this.bindings = bindings;
+    this.topics = [...bindings.keys()];
   }
 
   /**
@@ -209,70 +263,70 @@ export class DetectionStreamConsumer {
    * Consumes one batch from one topic-partition.
    *
    * Three passes on purpose. Decode everything first, so an ingestion call is
-   * never made from a half-read batch; then ingest once per retailer partition,
-   * so the single-partition guarantee is structural rather than a comment; then
-   * walk the records back in arrival order to report and to work out the commit
-   * watermark, which only the original order can tell us.
+   * never made from a half-read batch; then ingest what survived as one batch;
+   * then walk the records back in arrival order to report and to work out the
+   * commit watermark, which only the original order can tell us.
+   *
+   * The batch's retailer is the *subscription's*, never one read out of a
+   * payload. A topic belongs to exactly one retailer, so the partition is known
+   * before a single byte is decoded, and every event that disagrees with it was
+   * already dead-lettered during decoding. That is what makes
+   * "single-partition by construction" a fact about the code rather than a
+   * property of a grouping step that happened to work.
    */
   async consume(batch: StreamBatch): Promise<ConsumedBatch> {
     const failedAt = this.deps.now();
-    const adapter = this.adapters.get(batch.topic);
+    const binding = this.bindings.get(batch.topic);
 
-    if (adapter === undefined) {
+    if (binding === undefined) {
       // Only reachable through a pattern subscription or a misconfigured runner,
       // and retrying will never make the topic known — so it is terminal, and the
       // batch commits through rather than blocking the partition forever.
       const failure: DecodeFailure = {
         reason: 'unknown_topic',
-        detail: `no detection source adapter is bound to topic "${batch.topic}"`,
+        detail: `this consumer is not subscribed to topic "${batch.topic}"`,
         retailerId: null,
       };
       return this.finish(
         batch,
         batch.records.map((record) => ({ record, event: null, failure, outcome: null })),
         failedAt,
+        null,
       );
     }
 
     const slots: Slot[] = [];
-    const groups = new Map<RetailerId, Slot[]>();
+    const decoded: Slot[] = [];
 
     for (const record of batch.records) {
-      const decoded = this.decode(adapter, record);
-      const slot: Slot = decoded.ok
-        ? { record, event: decoded.value, failure: null, outcome: null }
-        : { record, event: null, failure: decoded.error, outcome: null };
+      const result = this.decode(binding, record);
+      const slot: Slot = result.ok
+        ? { record, event: result.value, failure: null, outcome: null }
+        : { record, event: null, failure: result.error, outcome: null };
       slots.push(slot);
-
-      if (decoded.ok) {
-        const partition = decoded.value.envelope.retailerId;
-        const group = groups.get(partition);
-        if (group === undefined) groups.set(partition, [slot]);
-        else group.push(slot);
-      }
+      if (result.ok) decoded.push(slot);
     }
 
-    for (const [partition, group] of groups) {
-      // Single-partition by construction: the grouping key *is* the batch's
-      // partition, so there is no path here that pools two retailers' events.
+    if (decoded.length > 0) {
       const detectionBatch: DetectionEventBatch = {
-        retailerId: partition,
-        // Non-null: a slot only joins a group after decoding succeeded.
-        events: group.map((slot) => slot.event as DetectionEvent),
+        retailerId: binding.subscription.retailerId,
+        // Non-null: a slot only reaches here after decoding succeeded, and
+        // decoding refused every envelope naming a different retailer.
+        events: decoded.map((slot) => slot.event as DetectionEvent),
       };
       const outcomes = await this.deps.ingestion.ingestBatch(detectionBatch);
 
-      if (outcomes.length !== group.length) {
+      if (outcomes.length !== decoded.length) {
         throw new Error(
-          `DetectionIngestionPort returned ${outcomes.length} outcomes for ${group.length} events; outcomes are contracted to be positional`,
+          `DetectionIngestionPort returned ${outcomes.length} outcomes for ${decoded.length} events; outcomes are contracted to be positional`,
         );
       }
-      group.forEach((slot, position) => {
+      decoded.forEach((slot, position) => {
         slot.outcome = outcomes[position] ?? null;
       });
     }
 
-    return this.finish(batch, slots, failedAt);
+    return this.finish(batch, slots, failedAt, binding.subscription.retailerId);
   }
 
   /**
@@ -284,9 +338,10 @@ export class DetectionStreamConsumer {
    * and guessing at the boundary is how a renamed field becomes a wrong shelf state.
    */
   private decode(
-    adapter: AnySourceAdapter,
+    binding: BoundTopic,
     record: StreamRecord,
   ): Result<DetectionEvent, DecodeFailure> {
+    const { adapter, subscription } = binding;
     const fail = (
       reason: DeadLetterReason,
       detail: string,
@@ -342,6 +397,22 @@ export class DetectionStreamConsumer {
       return fail('schema_violation', this.detailOf(error));
     }
 
+    const envelopePartition = event.envelope.retailerId;
+
+    // The topic and the envelope must agree. This is the outer of the two
+    // checks and the one with the sharper consequence: the topic is a
+    // deployment fact — one tenant's namespace, one tenant's ACL — so an
+    // envelope naming someone else on it is a producer publishing into the
+    // wrong tenant's stream, and accepting it would file one retailer's shelf
+    // data under another's name with the broker's own routing vouching for it.
+    if (!belongsToRetailer(event.envelope, subscription.retailerId)) {
+      return fail(
+        'topic_retailer_mismatch',
+        `topic "${record.topic}" carries retailer "${subscription.retailerId}" but the envelope declares "${envelopePartition}"`,
+        envelopePartition,
+      );
+    }
+
     // The broker's partition key and the envelope must agree. The port requires
     // the envelope to carry the partition rather than infer it from the
     // connection; this is the other half of that — a producer that publishes one
@@ -349,7 +420,6 @@ export class DetectionStreamConsumer {
     // either value over the other would put one retailer's shelf data in the
     // other's partition.
     const key = record.key;
-    const envelopePartition = event.envelope.retailerId;
     if (key === null || key.trim() === '') {
       return fail(
         'partition_key_mismatch',
@@ -387,6 +457,7 @@ export class DetectionStreamConsumer {
     batch: StreamBatch,
     slots: readonly Slot[],
     failedAt: Instant,
+    retailerOf: RetailerId | null,
   ): Promise<ConsumedBatch> {
     const letters: DeadLetter[] = [];
     const dispositions: RecordDisposition[] = [];
@@ -432,13 +503,11 @@ export class DetectionStreamConsumer {
     }
 
     // Only the partitions actually submitted to ingestion. A record rejected for
-    // a key mismatch names a retailer too, but it never reached that retailer's
-    // partition, and counting it here would overstate what the batch touched.
-    const retailers: RetailerId[] = [];
-    for (const slot of slots) {
-      const partition = slot.event?.envelope.retailerId;
-      if (partition !== undefined && !retailers.includes(partition)) retailers.push(partition);
-    }
+    // a key or topic mismatch names a retailer too, but it never reached that
+    // retailer's partition, and counting it here would overstate what the batch
+    // touched. At most one, since a topic holds one retailer.
+    const retailers: readonly RetailerId[] =
+      retailerOf !== null && slots.some((slot) => slot.event !== null) ? [retailerOf] : [];
 
     return {
       topic: batch.topic,

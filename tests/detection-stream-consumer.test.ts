@@ -11,6 +11,7 @@ import {
   type ConsumedBatch,
   type DeadLetterReason,
   type DetectionSource,
+  type DetectionSubscription,
   type Facing,
   type FacingId,
   type RecordDisposition,
@@ -18,6 +19,7 @@ import {
   type SignalOf,
 } from '../src/index.js';
 import { ACME, RIVAL, STORE, facingWith, hour } from './support/fixtures.js';
+import { ACME_SLUG, RIVAL_SLUG } from './support/tenancy.js';
 import { InMemoryFacingRepository, InMemoryIngestionLedger } from './support/in-memory-ports.js';
 import {
   InMemoryEventStream,
@@ -84,6 +86,7 @@ const harnessOver = (facings: readonly Facing[] = [facingWith(FACING_REF, hour(0
       ingestion,
       deadLetters,
       now: () => NOW,
+      subscriptions: ACME_SUBSCRIPTIONS,
     }),
     stream,
     deadLetters,
@@ -92,6 +95,13 @@ const harnessOver = (facings: readonly Facing[] = [facingWith(FACING_REF, hour(0
   };
 };
 
+/** Acme's five detection topics, as the bus topology would generate them. */
+const ACME_SUBSCRIPTIONS: readonly DetectionSubscription[] = DETECTION_SOURCES.map((source) => ({
+  topic: detectionTopic(ACME_SLUG, source),
+  source,
+  retailerId: ACME,
+}));
+
 /** Consumes one payload on one source's topic, keyed as a producer would key it. */
 const consumeOne = async (
   harness: Harness,
@@ -99,7 +109,7 @@ const consumeOne = async (
   payload: unknown,
   key: string | null = ACME_CODE,
 ): Promise<ConsumedBatch> => {
-  const topic = detectionTopic(source);
+  const topic = detectionTopic(ACME_SLUG, source);
   return harness.consumer.consume(streamBatch(topic, [streamRecord(topic, key, payload)]));
 };
 
@@ -139,27 +149,54 @@ const PAYLOAD_BY_SOURCE: { readonly [S in DetectionSource]: () => unknown } = {
 };
 
 describe('subscribing to every detection source', () => {
-  it('binds one adapter, on its own topic, to each of the five sources', () => {
+  it('binds one adapter to each of the five sources', () => {
     // A mapped type over `DetectionSource` backs the registry, so this is really
-    // asserting the compiler's guarantee holds at runtime too — and that no two
-    // adapters landed on the same topic, which would silently shadow one source.
-    const topics = DETECTION_SOURCES.map((source) => DETECTION_SOURCE_ADAPTERS[source].topic);
-
+    // asserting the compiler's guarantee holds at runtime too.
     expect(DETECTION_SOURCES).toHaveLength(5);
-    expect(new Set(topics).size).toBe(5);
     for (const source of DETECTION_SOURCES) {
       expect(DETECTION_SOURCE_ADAPTERS[source].source).toBe(source);
     }
   });
 
-  it('subscribes to all five topics when started', async () => {
+  it('subscribes to one topic per source, inside its own retailer namespace', async () => {
     const harness = harnessOver();
     const subscription = await harness.consumer.start();
 
     expect([...subscription.topics].sort()).toEqual(
-      DETECTION_SOURCES.map(detectionTopic).sort(),
+      DETECTION_SOURCES.map((source) => detectionTopic(ACME_SLUG, source)).sort(),
     );
     expect(harness.stream.topics).toHaveLength(5);
+    // Every topic sits under this retailer's prefix and nobody else's — the
+    // property an ACL is granted on.
+    for (const topic of subscription.topics) {
+      expect(topic.startsWith(`osa.${ACME_SLUG}.`)).toBe(true);
+    }
+  });
+
+  it('refuses to start against two subscriptions claiming one topic', () => {
+    const topic = detectionTopic(ACME_SLUG, 'arpalus_detection');
+
+    expect(
+      () =>
+        new DetectionStreamConsumer({
+          stream: new InMemoryEventStream(),
+          ingestion: new RecordingIngestion(
+            new DetectionIngestionService({
+              facings: new InMemoryFacingRepository(),
+              ledger: new InMemoryIngestionLedger(),
+              now: () => NOW,
+              nextSignalId: streamSignalId,
+              nextEventId: (facing: Facing) => eventId(`${facing.facingId}:1`),
+            }),
+          ),
+          deadLetters: new RecordingDeadLetterSink(),
+          now: () => NOW,
+          subscriptions: [
+            { topic, source: 'arpalus_detection', retailerId: ACME },
+            { topic, source: 'arpalus_detection', retailerId: RIVAL },
+          ],
+        }),
+    ).toThrow(/subscribed twice/);
   });
 
   it.each(DETECTION_SOURCES)(
@@ -404,7 +441,7 @@ describe('surviving what producers actually send', () => {
 
   it('sets aside bytes that are not valid UTF-8', async () => {
     const harness = harnessOver();
-    const topic = detectionTopic('arpalus_detection');
+    const topic = detectionTopic(ACME_SLUG, 'arpalus_detection');
     const record = streamRecord(topic, ACME_CODE, null, {
       value: new Uint8Array([0xff, 0xfe, 0xfd]),
     });
@@ -520,7 +557,7 @@ describe('surviving what producers actually send', () => {
 
   it('keeps consuming past a bad record instead of stalling the partition', async () => {
     const harness = harnessOver();
-    const topic = detectionTopic('arpalus_detection');
+    const topic = detectionTopic(ACME_SLUG, 'arpalus_detection');
     const good = (scanId: string, voidPct: number) =>
       streamRecord(
         topic,
@@ -546,7 +583,7 @@ describe('surviving what producers actually send', () => {
 
   it('files dead letters once per batch, with the payload verbatim', async () => {
     const harness = harnessOver();
-    const topic = detectionTopic('caper_frame');
+    const topic = detectionTopic(ACME_SLUG, 'caper_frame');
     const records = [
       streamRecord(topic, ACME_CODE, 'broken one'),
       streamRecord(topic, ACME_CODE, 'broken two'),
@@ -581,41 +618,66 @@ describe('surviving what producers actually send', () => {
 });
 
 describe('preserving the retailer partition from consumption onward', () => {
-  it('submits one single-partition batch per retailer in the delivery', async () => {
-    const harness = harnessOver([
-      facingWith(FACING_REF, hour(0)),
-      facingWith(FACING_REF, hour(0), { retailerId: RIVAL, storeId: STORE }),
-    ]);
-    const topic = detectionTopic('arpalus_detection');
-    const forRetailer = (code: string, retailer: string, scanId: string) =>
+  it('takes the batch partition from the subscription, never from a payload', async () => {
+    const harness = harnessOver();
+    const topic = detectionTopic(ACME_SLUG, 'arpalus_detection');
+    const scan = (scanId: string) =>
       streamRecord(
         topic,
-        code,
+        ACME_CODE,
         arpalusScan([arpalusSegment()], {
           scan_id: scanId,
-          site: { retailer, store: 'acme-0042' },
+          site: { retailer: ACME_CODE, store: 'acme-0042' },
         }),
       );
 
     const consumed = await harness.consumer.consume(
-      streamBatch(topic, [
-        forRetailer(ACME_CODE, ACME_CODE, 'scan-a'),
-        forRetailer(RIVAL_CODE, RIVAL_CODE, 'scan-r'),
-        forRetailer(ACME_CODE, ACME_CODE, 'scan-b'),
-      ]),
+      streamBatch(topic, [scan('scan-a'), scan('scan-b')]),
     );
 
     expect(consumed.dispositions.every((d) => d.outcome.status === 'ingested')).toBe(true);
-    // Two batches, never one pooled batch — the same no-cross-retailer-pooling
-    // invariant the domain enforces internally, asserted where data enters.
-    expect(harness.ingestion.batches).toHaveLength(2);
-    for (const batch of harness.ingestion.batches) {
-      expect(
-        batch.events.every((event) => event.envelope.retailerId === batch.retailerId),
-      ).toBe(true);
-    }
-    expect(harness.ingestion.batches.map((batch) => batch.retailerId)).toEqual([ACME, RIVAL]);
-    expect(consumed.retailers).toEqual([ACME, RIVAL]);
+    // One batch, and its retailer is the one the deployment put on this topic —
+    // not one read back out of the events it contains.
+    expect(harness.ingestion.batches).toHaveLength(1);
+    expect(harness.ingestion.batches[0]?.retailerId).toBe(ACME);
+    expect(consumed.retailers).toEqual([ACME]);
+  });
+
+  it("refuses a record whose envelope names a retailer other than its topic's", async () => {
+    const harness = harnessOver([
+      facingWith(FACING_REF, hour(0)),
+      facingWith(FACING_REF, hour(0), { retailerId: RIVAL, storeId: STORE }),
+    ]);
+    const topic = detectionTopic(ACME_SLUG, 'arpalus_detection');
+
+    // A rival's scan, correctly keyed for the rival, published into Acme's
+    // namespace: a credential or routing table pointed at the wrong tenant.
+    const consumed = await harness.consumer.consume(
+      streamBatch(topic, [
+        streamRecord(
+          topic,
+          RIVAL_CODE,
+          arpalusScan([arpalusSegment()], {
+            site: { retailer: RIVAL_CODE, store: 'acme-0042' },
+          }),
+        ),
+      ]),
+    );
+
+    expect(only(consumed).outcome).toMatchObject({
+      status: 'dead_lettered',
+      reason: 'topic_retailer_mismatch',
+    });
+    expect(harness.ingestion.batches).toHaveLength(0);
+    // Refused before the key check, because the topic is the stronger statement:
+    // it is fixed by the deployment, not chosen by the producer.
+    expect(harness.deadLetters.letters[0]?.detail).toContain(ACME);
+    expect(consumed.retailers).toEqual([]);
+  });
+
+  it("never lets one retailer's topic name another retailer's namespace", () => {
+    expect(detectionTopic(ACME_SLUG, 'arpalus_detection')).not.toContain(RIVAL_SLUG);
+    expect(detectionTopic(RIVAL_SLUG, 'arpalus_detection')).not.toContain(ACME_SLUG);
   });
 
   it('refuses a record whose key and envelope name different retailers', async () => {
@@ -661,7 +723,7 @@ describe('preserving the retailer partition from consumption onward', () => {
 
 describe('committing what was actually handled', () => {
   it('holds the watermark before the first record that needs a retry', async () => {
-    const topic = detectionTopic('pos_movement');
+    const topic = detectionTopic(ACME_SLUG, 'pos_movement');
     const records = [
       streamRecord(topic, ACME_CODE, posBatch([posLine()], { batchId: 'b1' })),
       streamRecord(topic, ACME_CODE, posBatch([posLine()], { batchId: 'b2' })),
@@ -675,6 +737,7 @@ describe('committing what was actually handled', () => {
       ingestion: new ScriptedIngestion([acceptedAt(NOW), rateLimited(5_000), acceptedAt(NOW)]),
       deadLetters,
       now: () => NOW,
+      subscriptions: ACME_SUBSCRIPTIONS,
     });
 
     const consumed = await consumer.consume(streamBatch(topic, records));
@@ -692,7 +755,7 @@ describe('committing what was actually handled', () => {
   it('acks the subscription with the offset it is safe to commit through', async () => {
     const harness = harnessOver();
     await harness.consumer.start();
-    const topic = detectionTopic('shopper_scan');
+    const topic = detectionTopic(ACME_SLUG, 'shopper_scan');
     const record = streamRecord(topic, ACME_CODE, shopperItemScan());
 
     const ack = await harness.stream.deliver(streamBatch(topic, [record]));
@@ -703,7 +766,7 @@ describe('committing what was actually handled', () => {
 
   it('treats a redelivered record as a duplicate instead of re-applying it', async () => {
     const harness = harnessOver();
-    const topic = detectionTopic('arpalus_detection');
+    const topic = detectionTopic(ACME_SLUG, 'arpalus_detection');
     const record = streamRecord(
       topic,
       ACME_CODE,

@@ -29,8 +29,11 @@ export interface DecodeContext {
 
 export interface SourceAdapter<S extends DetectionSource> {
   readonly source: S;
-  /** The stream topic this producer publishes to. */
-  readonly topic: string;
+  // No topic here on purpose. Detection topics are per retailer as well as per
+  // source, so one producer's adapter reads as many topics as there are pilots,
+  // and naming one would be naming whichever tenant was onboarded first. The
+  // topic-to-adapter binding is a deployment fact, carried in the consumer's
+  // `DetectionSubscription`s.
   /** The producer's *own* payload versions this adapter knows how to read. */
   readonly supportedWireVersions: readonly string[];
   /**
