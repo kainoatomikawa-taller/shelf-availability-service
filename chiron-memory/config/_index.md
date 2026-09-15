@@ -1,0 +1,6 @@
+# config · 2
+
+> Section index — this project's **config** memory. Open a concept below for the full detail.
+
+- [[config/nounusedlocals-and-nounusedparameters-were-enabl]] — `noUnusedLocals` and `noUnusedParameters` were enabled in tsconfig.json as part of adding…
+- [[config/tsconfig-json-enables-strict-mode-plus-nouncheck]] — tsconfig.json enables strict mode plus noUncheckedIndexedAccess and…
