@@ -34,6 +34,7 @@ export const SECOND: Millis = millis(1_000);
 export const MINUTE: Millis = millis(60 * 1_000);
 export const HOUR: Millis = millis(60 * 60 * 1_000);
 export const DAY: Millis = millis(24 * 60 * 60 * 1_000);
+export const WEEK: Millis = millis(7 * 24 * 60 * 60 * 1_000);
 
 /** Non-negative distance between two instants. */
 export const elapsed = (from: Instant, to: Instant): Millis => millis(Math.max(0, to - from));

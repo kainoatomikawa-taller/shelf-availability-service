@@ -11,3 +11,7 @@
 export * from './signal-normalization.js';
 export * from './detection-ingestion.service.js';
 export * from './rank-gaps.use-case.js';
+export * from './create-tasks.use-case.js';
+export * from './verification-loop.use-case.js';
+export * from './outcome-metrics.js';
+export * from './availability-baseline.use-case.js';

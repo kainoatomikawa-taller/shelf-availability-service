@@ -21,7 +21,12 @@ import {
   type TaskState,
   type TaskStatus,
 } from './task-state.js';
-import { requiresShelfVerification, type TaskPriority, type TaskType } from './task-type.js';
+import {
+  raisePriority,
+  requiresShelfVerification,
+  type TaskPriority,
+  type TaskType,
+} from './task-type.js';
 
 /**
  * A unit of corrective work at one facing.
@@ -207,4 +212,32 @@ export function applyTaskCommand(
     default:
       return assertNever(command, 'applyTaskCommand');
   }
+}
+
+/**
+ * Reopens a task *and* raises its urgency — the domain's name for re-escalation.
+ *
+ * Kept as a composition over `applyTaskCommand` rather than folded into the
+ * `reopen` command, because reopening and escalating are genuinely two decisions:
+ * a supervisor bouncing a task back and a verification window lapsing both reopen
+ * it, and only the loop's own failure to close should also cost the rest of the
+ * store's worklist a place. Callers that want the bare transition still have it.
+ *
+ * One rung per bounce, applied to the priority the task currently carries, so a
+ * task that has failed twice sits two rungs above where it started and one that
+ * is already `critical` simply stays there.
+ */
+export function escalateTask(
+  task: Task,
+  at: Instant,
+  reason: ReopenReason,
+): Result<TaskTransition, InvalidTaskTransitionError> {
+  const reopened = applyTaskCommand(task, { kind: 'reopen', at, reason });
+  if (!reopened.ok) return reopened;
+
+  const { task: next } = reopened.value;
+  return ok({
+    ...reopened.value,
+    task: { ...next, priority: raisePriority(task.priority) },
+  });
 }

@@ -21,8 +21,21 @@ import type { Page, PageRequest } from '../common/paging.js';
 /** Rollup grain for a time series. `period` returns a single bucket for the whole window. */
 export type ReportGranularity = 'hour' | 'day' | 'week' | 'period';
 
-/** How a report is broken down beyond the overall figure. */
-export type ReportDimension = 'store' | 'product' | 'category' | 'aisle' | 'task_type';
+/**
+ * How a report is broken down beyond the overall figure.
+ *
+ * `department` and `category` are two cuts of the same merchandising hierarchy
+ * and both are here on purpose: a category tells a buyer which shelf is failing,
+ * a department tells a store manager whose staff to move, and outcome metrics are
+ * read by the second far more often than the first.
+ */
+export type ReportDimension =
+  | 'store'
+  | 'product'
+  | 'department'
+  | 'category'
+  | 'aisle'
+  | 'task_type';
 
 export interface ReportScope extends RetailerPartitioned {
   /** Partition key. Required — there is no all-retailers query. */
@@ -40,7 +53,7 @@ export interface ReportScope extends RetailerPartitioned {
 /** One labelled slice of a breakdown. */
 export interface ReportBreakdown<T> {
   readonly dimension: ReportDimension;
-  /** Dimension member: a store id, product id, category name, aisle or task type. */
+  /** Dimension member: a store id, product id, department, category, aisle or task type. */
   readonly key: string;
   readonly label: string;
   readonly value: T;

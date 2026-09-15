@@ -19,11 +19,16 @@ npm run build       # emits dist/
 
 ```
 signal (×6 sources) ──▶ Facing ──▶ FacingStateEvent ──▶ Task ──▶ VerificationPass ──▶ verified
-                          │  │                                                           │
+                          │  │                            ▲                              │
+                          │  │                            └───── re-escalated ───────────┘
                           │  └──▶ DetectedGap ──▶ RankedGap (department × velocity × revisit density)
-                          │                                                              │
-                          └──────────────▶ AvailabilityIndex            AuditLogEntry ◀──┘
+                          │
+                          └──────────────▶ AvailabilityIndex            AuditLogEntry
 ```
+
+A task is raised from the ranked gap, expressed on its lane at the shelf edge, and closed only when
+two clean passes say the shelf actually recovered — otherwise it comes back round one rung more
+urgent.
 
 ### Facing — the addressable unit
 
@@ -313,6 +318,45 @@ returns the committed worklist, the excluded gaps, the per-department cut and th
 of it. Pure — no clock, no IO — so the same call ranks a live store, replays last Tuesday, or
 back-tests a different threshold.
 
+**`planTasks` / `dispatchTasks`** turn that worklist into typed tasks and light them at the shelf.
+The task type follows from the gap kind and the lane from the task type, so nothing reaches a tag as
+untyped work and nothing lands on the reserved green lane — the mapping is data, it can arrive from
+storage, and one light meaning two things on the same shelf is not worth discovering on the floor.
+Priority is banded by worklist position, configuration with a neutral default for the same reason
+department weights are: the platform does not own the retailer's staffing. Dispatch groups by store
+because capabilities belong to the fleet in a building, batches to the gateway's declared limit, and
+sends the caller's *unfiltered* ladder so `degraded` still means something. A fleet whose ladder
+bottoms out at `none` is never called at all, and every task the shelf could not carry comes back in
+`routedElsewhere` — a dark tag is not a closed loop.
+
+**`decideVerification` / `runVerificationLoop`** close the loop or put the work back. A task verifies
+at the instant its second clean pass landed, not when the evaluator noticed, so a scheduler running
+late cannot inflate the verification lag it reports; passes after the evaluation instant are invisible,
+because an evaluation is a statement about a moment. Two things re-escalate: a dirty pass after the
+fix (the condition persisted) and a deadline of `resolvedAt + 24h` passing without the evidence (the
+window lapsed). Evidence beats the deadline — a late evaluation still closes a task whose passes are
+there, since the deadline exists to escalate *absent* evidence, not to discard present evidence.
+Re-escalation reopens **and** raises urgency one rung, so work that bounced does not go back out at
+the priority that already failed. The shell then clears the lane on a close and lights it again,
+more urgently, on a bounce.
+
+**`openOutcome` / `withTransition` / `computeOutcomeMetrics`** accumulate the outcome metrics as the
+loop runs, rather than re-deriving them later by joining task rows back to facing history. Stage
+anchors are a decision, not an accident: dispatch and response lag anchor on the *first* assignment
+— how long the store took to pick the work up — while resolution and verification lag anchor on the
+attempt that actually held, and rework is counted in `reopenCount` instead of being smeared into
+either. Percentiles are nearest-rank, so every reported figure is a latency some gap really had.
+Gaps are cohorted by detection so both reports describe one population, and the reports come back in
+the shapes `TaskPerformanceQueryPort` publishes, broken down by department by default.
+
+**`establishAvailabilityBaseline`** computes the retailer's prior on the same facing-time in-stock
+definition the live index uses — the same `computeAvailabilityIndex`, not a second implementation of
+it, because every claim the service makes later is a comparison against this number. It refuses to
+call a baseline *established* below half coverage, under a full trading week, or with nothing
+measured, and still publishes the figure with the shortfalls attached: withholding it only moves the
+computation into somebody's spreadsheet without the caveat. `compareToBaseline` will not compute a
+lift against a prior that was never established.
+
 ## Retailer partitioning
 
 `retailerId` is a first-class field on every entity — facing, history, event, signal, task, lane map,
@@ -346,6 +390,7 @@ src/domain/audit/         audit log entities
 src/ports/common/         paging, shared schema-versioning contract
 src/ports/inbound/        detection ingestion, reporting/query, audit export
 src/ports/outbound/       ESL actuation, facing repository, ingestion ledger
-src/application/          signal normalization, ingestion service, gap ranking use case
-tests/                    unit tests (179), fixtures and in-memory ports under tests/support
+src/application/          signal normalization, ingestion, gap ranking, task dispatch,
+                          verification loop, outcome metrics, availability baseline
+tests/                    unit tests (228), fixtures and in-memory ports under tests/support
 ```

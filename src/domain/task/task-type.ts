@@ -46,3 +46,23 @@ export const requiresShelfVerification = (type: TaskType): boolean => {
       return false;
   }
 };
+
+export const TASK_PRIORITIES = [
+  'low',
+  'normal',
+  'high',
+  'critical',
+] as const satisfies readonly TaskPriority[];
+
+/**
+ * One step up the urgency ladder, saturating at `critical`.
+ *
+ * Used when work bounces back: a facing that was reported fixed and is still
+ * empty has already cost the retailer one dispatch, so it re-enters the worklist
+ * above where it sat the first time rather than at the same urgency that failed.
+ */
+export function raisePriority(priority: TaskPriority, steps = 1): TaskPriority {
+  if (steps <= 0) return priority;
+  const raised = TASK_PRIORITIES.indexOf(priority) + Math.floor(steps);
+  return TASK_PRIORITIES[Math.min(raised, TASK_PRIORITIES.length - 1)] ?? 'critical';
+}

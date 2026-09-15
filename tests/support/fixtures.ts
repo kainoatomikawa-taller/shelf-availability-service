@@ -1,4 +1,6 @@
 import {
+  LED_COLORS,
+  STANDARD_DEGRADATION_LADDER,
   carrotTagId,
   categoryId,
   confidence,
@@ -35,6 +37,7 @@ import {
   type DetectionEventEnvelope,
   type DetectionObservationOf,
   type DetectionSource,
+  type EslFleetCapabilities,
   type FacingId,
   type FacingPass,
   type GapDetail,
@@ -356,5 +359,28 @@ export const posObservation = (
   unitsSold: 10,
   expectedUnitsSold: 10,
   windowMillis: millis(60 * 60 * 1000),
+  ...overrides,
+});
+
+// ---------------------------------------------------------------------------
+// Shelf-edge fleet
+// ---------------------------------------------------------------------------
+
+/** A fully capable Carrot Tags fleet; override to model an older generation. */
+export const fleetCapabilities = (
+  overrides: Partial<EslFleetCapabilities> = {},
+): EslFleetCapabilities => ({
+  retailerId: ACME,
+  storeId: STORE,
+  fleetVendor: 'carrot-tags',
+  supportedModes: ['pick_to_light', 'lane_colour_steady', 'label_badge', 'mono_indicator', 'none'],
+  renderableColours: [...LED_COLORS],
+  supportedFlashPatterns: ['slow', 'fast', 'double_pulse'],
+  maxBadgeCharacters: 12,
+  degradationLadder: [...STANDARD_DEGRADATION_LADDER],
+  minCommandIntervalMillis: millis(1_000),
+  batchLimit: 50,
+  expressionLeaseMillis: millis(4 * 60 * 60 * 1000),
+  observedAt: hour(0),
   ...overrides,
 });
