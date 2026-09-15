@@ -21,3 +21,5 @@ export * from './domain/availability/availability-index.js';
 export * from './domain/availability/verification.js';
 
 export * from './domain/audit/audit-log.js';
+
+export * from './ports/index.js';

@@ -2,9 +2,10 @@
 
 This project turns Instacart’s existing shelf detection technology into a closed-loop service that identifies inventory issues, assigns store employees tasks to fix them, and verifies resolution.
 
-This repository currently contains the **domain substrate**: the facing-level model, its
+This repository currently contains the **domain substrate** — the facing-level model, its
 time-ordered event history, the typed task lifecycle, the Carrot Tags LED lane mapping, the
-availability index and the verification rule — all as pure, dependency-free domain logic.
+availability index and the verification rule, all as pure, dependency-free domain logic — and the
+**hexagonal boundary** of ports around it.
 
 ```
 npm install
@@ -134,10 +135,101 @@ retailer can tighten it without forking the evaluator. The decisions worth namin
 A domain entity, not a logging concern: retailers are shown why a facing was called out of stock,
 why an employee was dispatched, and on what evidence the task was declared verified.
 
+## Ports — the hexagonal boundary
+
+`src/ports/` declares the interfaces this layer owns. Types and contract constants only: no
+behaviour, no adapters. Every port is expressed in terms of the domain entities above, so the
+boundary cannot describe a concept the domain does not have. The only JavaScript these modules emit
+is the published contract data — schema versions, the detection source list, the degradation ladder,
+the wire encoding.
+
+| Direction | Port | Responsibility |
+| --- | --- | --- |
+| Inbound | `DetectionIngestionPort` | Versioned detection event schema for the five shelf-observing producers |
+| Inbound | `AvailabilityQueryPort` | Availability index and the per-facing records behind it |
+| Inbound | `TaskPerformanceQueryPort` | Task work rate, resolved-gap rate, detection-to-resolution latency |
+| Inbound | `AuditExportPort` | Attestable export of the retained facing-state event log |
+| Outbound | `EslActuationPort` | Expressing a task at the shelf edge, with graceful degradation |
+
+### Detection ingestion
+
+`src/ports/inbound/detection-ingestion.port.ts`
+
+**This layer owns the boundary**: the five producers adapt to the schema, not the other way round.
+`DetectionSource` is derived as `Exclude<SignalSource, 'planogram_record'>` — five sources, not six,
+because a planogram record is authored reference data describing what *should* be on the shelf, not
+an observation of what is. Deriving it by exclusion means a seventh signal source forces an explicit
+decision about which side of the boundary it belongs on.
+
+One event carries an envelope plus many observations, because a single Arpalus pass or Caper frame
+routinely covers a whole bay. Ingestion is idempotent on `envelope.idempotencyKey` and ordered by
+`occurredAt`, never by arrival. Batches are single-partition by construction.
+
+The wire schema is written out explicitly rather than derived from the domain, because a published
+contract must not shift whenever an internal type is refactored. Exported conformance aliases give
+the other half of that bargain: if the domain gains a required field the wire cannot supply, the
+build fails and the drift becomes a version decision instead of a runtime surprise.
+
+**Versioning.** `major.minor`. Minor is additive and backward compatible; anything else is a major.
+The service accepts the current major and the previous major until that major's declared sunset
+instant, unknown fields are ignored, and `describeSchemaContract()` publishes the whole policy so a
+producer can negotiate before it sends anything.
+
+### ESL actuation
+
+`src/ports/outbound/esl-actuation.port.ts`
+
+Built around graceful degradation, because shelf-edge hardware is heterogeneous and unreliable by
+nature. The fleet declares what it can express (`EslFleetCapabilities`), the caller declares an
+ordered fallback ladder (`modePreference`), and the result reports which rung was actually used
+(`mode` plus `degraded`). The ladder runs `pick_to_light → lane_colour_steady → label_badge →
+mono_indicator → none` and always terminates: `none` is a real answer meaning "route this to the
+handheld task list", not a failure. Expressions are leased rather than set-and-forget, so a crashed
+service leaves dark shelves rather than tags lit for work nobody is doing.
+
+### Reporting and query
+
+`src/ports/inbound/reporting.port.ts`
+
+Every query is scoped to exactly one retailer — the same no-cross-retailer-pooling rule the domain
+enforces on its aggregates, applied to the read model. There is no shape in the module that can
+express a question spanning two retailers.
+
+Index points carry their numerator and denominator alongside the ratio, so callers can re-aggregate
+without re-querying and a figure computed from a sliver of measured time is visibly untrustworthy.
+`ResolvedGapRatePoint` reports `awaitingVerification` separately and excludes it from the
+denominator: a gap detected an hour before the window closes cannot have completed a 24-hour
+verification, and counting it as unresolved understates the rate. `DetectionToResolutionPoint`
+breaks the loop into stages — detection lag, dispatch lag, employee response, verification lag — so
+a slow number can be attributed rather than argued about, and reports percentiles rather than a mean
+because the tail is what a store manager actually experiences.
+
+Task work rate exposes `labourHours` and `tasksPerLabourHour` as nullable: labour comes from the
+retailer's workforce feed, and the service does not estimate it when that feed is absent.
+
+### Audit export
+
+`src/ports/inbound/audit-export.port.ts`
+
+The contract this port exists to keep: **an auditor holding an export can recompute the reported
+availability index and get the same number.** `FacingStateAuditRecord` therefore carries the carry-in
+state, every timestamped transition, and the evidence behind each one — and the reported totals, so
+a verifier can recompute and compare rather than trust. `tests/ports-contract.test.ts` exercises
+exactly that: it reconstructs a `FacingTimeline` from a record using only what the record carries,
+feeds it to the domain's own `computeFacingAvailability`, and asserts the answer matches.
+
+`AuditCompleteness` states known gaps rather than hiding them — an export that quietly omits what it
+could not retrieve is worse than no export, because the auditor recomputes a different number and
+cannot tell whether the service or the export is wrong. `sealArtifact` returns a manifest with a
+content hash and a retrieval handle; the body is fetched separately, since a period-length export
+across a full estate will not fit in a response.
+
 ## Retailer partitioning
 
 `retailerId` is a first-class field on every entity — facing, history, event, signal, task, lane map,
-verification pass, availability index, audit log and audit entry all satisfy `RetailerPartitioned`.
+verification pass, availability index, audit log and audit entry all satisfy `RetailerPartitioned`,
+as do the boundary types: detection envelopes and batches, report scopes, ESL commands and
+capabilities, and audit export scopes and artifacts.
 Isolation is a modelling invariant rather than a query-time filter: there is no path in the domain
 that pools data across retailers, so `assertSameRetailer` throws `CrossRetailerAccessError` instead
 of quietly producing a wrong aggregate.
@@ -160,5 +252,8 @@ src/domain/facing/        shelf state, six signal sources, interpretation, event
 src/domain/task/          task types, LED colour lanes, typed lifecycle states, task entity
 src/domain/availability/  availability index, verification rule
 src/domain/audit/         audit log entities
-tests/                    unit tests (111), fixtures under tests/support
+src/ports/common/         paging, shared schema-versioning contract
+src/ports/inbound/        detection ingestion, reporting/query, audit export
+src/ports/outbound/       ESL actuation
+tests/                    unit tests (121), fixtures under tests/support
 ```
