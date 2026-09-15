@@ -1,8 +1,9 @@
-# gotcha · 4
+# gotcha · 5
 
 > Section index — this project's **gotcha** memory. Open a concept below for the full detail.
 
 - [[gotcha/appendevent-originally-accepted-a-caller-supplie]] — appendEvent originally accepted a caller-supplied sequence number without validating it…
+- [[gotcha/each-source-s-unit-encoding-quirks-are-absorbed]] — Each source's unit/encoding quirks are absorbed entirely inside its adapter
 - [[gotcha/lane-resolution-rejects-a-color-lane-that-resolv]] — Lane resolution rejects a color lane that resolves onto the reserved green lane at…
 - [[gotcha/the-failed-verification-attempt-counter-was-orig]] — The failed-verification-attempt counter was originally stored only inside the task's…
 - [[gotcha/the-verification-rule-s-24-hour-boundary-is-exac]] — The verification rule's 24-hour boundary is exact-inclusive
