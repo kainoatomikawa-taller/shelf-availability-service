@@ -1,0 +1,23 @@
+{
+  "name": "osa-domain",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Core domain model for the Closed-Loop On-Shelf Availability Service: facing-level entities, time-ordered event history, task lifecycle and the availability index.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9"
+  }
+}
