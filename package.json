@@ -13,11 +13,17 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck:web": "npm --workspace @osa/dashboard run typecheck",
+    "test:web": "npm --workspace @osa/dashboard run test",
+    "dev:web": "npm --workspace @osa/dashboard run dev"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
     "typescript": "^5.6.3",
     "vitest": "^2.1.9"
-  }
+  },
+  "workspaces": [
+    "web"
+  ]
 }

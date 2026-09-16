@@ -1,0 +1,522 @@
+/*
+ * Design tokens for every shared component.
+ *
+ * Roles, not raw hex, at every call site — so light and dark swap in one place
+ * and nothing hard-codes a colour it would then have to re-derive for the other
+ * mode. The dark column is a selected set of steps for the dark surface, not an
+ * automatic inversion of the light one.
+ *
+ * The categorical slots are the validated default order: worst adjacent CVD
+ * ΔE 9.2 light / 9.4 dark across the three slots these components use, all
+ * clear of the 8.0 target. Slot 3 (aqua) sits at 2.74:1 on the light surface,
+ * so anything painted with it ships visible labels or a table view beside it —
+ * that is the relief rule, and it is why every chart here has a legend and
+ * every table can show the same numbers.
+ */
+
+.osa-root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --osa-surface-1: #fcfcfb;
+  --osa-plane: #f9f9f7;
+  --osa-surface-sunken: #f2f1ed;
+
+  /* Ink */
+  --osa-text-primary: #0b0b0b;
+  --osa-text-secondary: #52514e;
+  --osa-text-muted: #898781;
+
+  /* Chart chrome */
+  --osa-gridline: #e1e0d9;
+  --osa-axis: #c3c2b7;
+  --osa-border: rgba(11, 11, 11, 0.1);
+
+  /* Categorical slots, in fixed order. Never cycled, never reassigned by rank. */
+  --osa-series-1: #2a78d6;
+  --osa-series-2: #eb6834;
+  --osa-series-3: #1baf7a;
+
+  /* Sequential ramp (blue), for magnitude. */
+  --osa-seq-100: #cde2fb;
+  --osa-seq-250: #86b6ef;
+  --osa-seq-450: #2a78d6;
+  --osa-seq-600: #184f95;
+
+  /* Status. Fixed across modes, never themed, never reused as a series colour. */
+  --osa-status-good: #0ca30c;
+  --osa-status-warning: #fab219;
+  --osa-status-serious: #ec835a;
+  --osa-status-critical: #d03b3b;
+  --osa-status-unknown: #898781;
+
+  /* Delta direction. */
+  --osa-delta-good: #006300;
+  --osa-delta-bad: #d03b3b;
+
+  /* Type */
+  --osa-font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --osa-size-hero: 48px;
+  --osa-size-value: 30px;
+  --osa-size-body: 14px;
+  --osa-size-label: 13px;
+  --osa-size-micro: 11px;
+
+  /* Spacing & shape */
+  --osa-space-1: 4px;
+  --osa-space-2: 8px;
+  --osa-space-3: 12px;
+  --osa-space-4: 16px;
+  --osa-space-5: 24px;
+  --osa-radius: 10px;
+  --osa-radius-sm: 6px;
+
+  font-family: var(--osa-font);
+  color: var(--osa-text-primary);
+  background: var(--osa-plane);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) .osa-root {
+    color-scheme: dark;
+
+    --osa-surface-1: #1a1a19;
+    --osa-plane: #0d0d0d;
+    --osa-surface-sunken: #232321;
+
+    --osa-text-primary: #ffffff;
+    --osa-text-secondary: #c3c2b7;
+    --osa-text-muted: #898781;
+
+    --osa-gridline: #2c2c2a;
+    --osa-axis: #383835;
+    --osa-border: rgba(255, 255, 255, 0.1);
+
+    --osa-series-1: #3987e5;
+    --osa-series-2: #d95926;
+    --osa-series-3: #199e70;
+
+    --osa-seq-100: #184f95;
+    --osa-seq-250: #256abf;
+    --osa-seq-450: #3987e5;
+    --osa-seq-600: #9ec5f4;
+
+    --osa-delta-good: #0ca30c;
+  }
+}
+
+:root[data-theme='dark'] .osa-root {
+  color-scheme: dark;
+
+  --osa-surface-1: #1a1a19;
+  --osa-plane: #0d0d0d;
+  --osa-surface-sunken: #232321;
+
+  --osa-text-primary: #ffffff;
+  --osa-text-secondary: #c3c2b7;
+  --osa-text-muted: #898781;
+
+  --osa-gridline: #2c2c2a;
+  --osa-axis: #383835;
+  --osa-border: rgba(255, 255, 255, 0.1);
+
+  --osa-series-1: #3987e5;
+  --osa-series-2: #d95926;
+  --osa-series-3: #199e70;
+
+  --osa-seq-100: #184f95;
+  --osa-seq-250: #256abf;
+  --osa-seq-450: #3987e5;
+  --osa-seq-600: #9ec5f4;
+
+  --osa-delta-good: #0ca30c;
+}
+
+/* --- Shared primitives --------------------------------------------------- */
+
+.osa-panel {
+  background: var(--osa-surface-1);
+  border: 1px solid var(--osa-border);
+  border-radius: var(--osa-radius);
+  padding: var(--osa-space-4);
+}
+
+.osa-label {
+  font-size: var(--osa-size-label);
+  color: var(--osa-text-secondary);
+  margin: 0;
+}
+
+.osa-micro {
+  font-size: var(--osa-size-micro);
+  color: var(--osa-text-muted);
+  margin: 0;
+}
+
+/*
+ * Numbers that sit in a column align; numbers that stand alone do not.
+ * `tabular-nums` gives every digit the width of a zero, which reads loose at
+ * display sizes — so it is scoped to table cells and axis ticks only.
+ */
+.osa-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Metric card --------------------------------------------------------- */
+
+.osa-metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--osa-space-2);
+  min-width: 0;
+}
+
+.osa-metric-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--osa-space-2);
+}
+
+.osa-metric-card__value {
+  font-size: var(--osa-size-value);
+  font-weight: 600;
+  line-height: 1.1;
+  margin: 0;
+  color: var(--osa-text-primary);
+}
+
+.osa-metric-card__value--hero {
+  font-size: var(--osa-size-hero);
+}
+
+.osa-metric-card__value--unmeasured {
+  color: var(--osa-text-muted);
+  font-weight: 500;
+}
+
+.osa-metric-card__row {
+  display: flex;
+  align-items: center;
+  gap: var(--osa-space-3);
+  flex-wrap: wrap;
+}
+
+.osa-metric-card__delta {
+  font-size: var(--osa-size-label);
+  font-weight: 600;
+}
+
+.osa-metric-card__delta--good {
+  color: var(--osa-delta-good);
+}
+
+.osa-metric-card__delta--bad {
+  color: var(--osa-delta-bad);
+}
+
+.osa-metric-card__delta--flat {
+  color: var(--osa-text-muted);
+}
+
+.osa-metric-card__footnote {
+  font-size: var(--osa-size-micro);
+  color: var(--osa-text-muted);
+  margin: 0;
+}
+
+/* --- Status indicator ---------------------------------------------------- */
+
+.osa-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--osa-space-1);
+  font-size: var(--osa-size-label);
+  color: var(--osa-text-secondary);
+  white-space: nowrap;
+}
+
+.osa-status__glyph {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.osa-status--good .osa-status__glyph {
+  color: var(--osa-status-good);
+}
+.osa-status--warning .osa-status__glyph {
+  color: var(--osa-status-warning);
+}
+.osa-status--serious .osa-status__glyph {
+  color: var(--osa-status-serious);
+}
+.osa-status--critical .osa-status__glyph {
+  color: var(--osa-status-critical);
+}
+.osa-status--unknown .osa-status__glyph {
+  color: var(--osa-status-unknown);
+}
+
+.osa-status--dot-only {
+  gap: 0;
+}
+
+/* --- Charts -------------------------------------------------------------- */
+
+.osa-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--osa-space-2);
+  min-width: 0;
+}
+
+.osa-chart__title {
+  font-size: var(--osa-size-body);
+  font-weight: 600;
+  margin: 0;
+  color: var(--osa-text-primary);
+}
+
+.osa-chart__subtitle {
+  font-size: var(--osa-size-micro);
+  color: var(--osa-text-muted);
+  margin: 0;
+}
+
+.osa-chart__figure {
+  margin: 0;
+  position: relative;
+}
+
+/*
+ * Drawn at the measured container width, never stretched from a viewBox — a
+ * stretched viewBox scales the axis type along with the marks.
+ */
+.osa-chart__svg {
+  display: block;
+  max-width: 100%;
+  overflow: visible;
+}
+
+.osa-chart__tick {
+  font-size: var(--osa-size-micro);
+  fill: var(--osa-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.osa-chart__direct-label {
+  font-size: var(--osa-size-micro);
+  font-weight: 600;
+  fill: var(--osa-text-secondary);
+}
+
+.osa-chart__legend {
+  display: flex;
+  gap: var(--osa-space-4);
+  flex-wrap: wrap;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: var(--osa-size-micro);
+  color: var(--osa-text-secondary);
+}
+
+.osa-chart__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--osa-space-1);
+}
+
+.osa-chart__legend-key {
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  display: inline-block;
+}
+
+.osa-chart__tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--osa-surface-1);
+  border: 1px solid var(--osa-border);
+  border-radius: var(--osa-radius-sm);
+  padding: var(--osa-space-2);
+  font-size: var(--osa-size-micro);
+  color: var(--osa-text-primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.osa-chart__tooltip dl {
+  margin: var(--osa-space-1) 0 0;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px var(--osa-space-2);
+}
+
+.osa-chart__tooltip dt,
+.osa-chart__tooltip dd {
+  margin: 0;
+}
+
+.osa-chart__tooltip dd {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* --- Data table ---------------------------------------------------------- */
+
+.osa-table-wrap {
+  overflow-x: auto;
+}
+
+.osa-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--osa-size-body);
+}
+
+.osa-table caption {
+  text-align: left;
+  font-size: var(--osa-size-body);
+  font-weight: 600;
+  color: var(--osa-text-primary);
+  padding-bottom: var(--osa-space-2);
+}
+
+.osa-table th,
+.osa-table td {
+  padding: var(--osa-space-2) var(--osa-space-3);
+  text-align: left;
+  border-bottom: 1px solid var(--osa-border);
+}
+
+.osa-table thead th {
+  font-size: var(--osa-size-micro);
+  font-weight: 600;
+  color: var(--osa-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--osa-axis);
+  white-space: nowrap;
+}
+
+.osa-table td.osa-table__cell--numeric,
+.osa-table th.osa-table__cell--numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.osa-table__sort {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--osa-space-1);
+}
+
+.osa-table__sort:hover {
+  color: var(--osa-text-primary);
+}
+
+.osa-table tbody tr:hover {
+  background: var(--osa-surface-sunken);
+}
+
+.osa-table__more {
+  margin-top: var(--osa-space-3);
+}
+
+/* --- Async states -------------------------------------------------------- */
+
+.osa-skeleton {
+  background: var(--osa-surface-sunken);
+  border-radius: var(--osa-radius-sm);
+  height: 1em;
+  animation: osa-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes osa-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .osa-skeleton {
+    animation: none;
+  }
+}
+
+.osa-error {
+  display: flex;
+  flex-direction: column;
+  gap: var(--osa-space-2);
+  align-items: flex-start;
+}
+
+.osa-error__title {
+  font-size: var(--osa-size-body);
+  font-weight: 600;
+  margin: 0;
+  color: var(--osa-text-primary);
+}
+
+.osa-error__detail {
+  font-size: var(--osa-size-label);
+  color: var(--osa-text-secondary);
+  margin: 0;
+}
+
+.osa-button {
+  font: inherit;
+  font-size: var(--osa-size-label);
+  padding: var(--osa-space-1) var(--osa-space-3);
+  border-radius: var(--osa-radius-sm);
+  border: 1px solid var(--osa-border);
+  background: var(--osa-surface-1);
+  color: var(--osa-text-primary);
+  cursor: pointer;
+}
+
+.osa-button:hover {
+  background: var(--osa-surface-sunken);
+}
+
+.osa-empty {
+  font-size: var(--osa-size-label);
+  color: var(--osa-text-muted);
+  margin: 0;
+  padding: var(--osa-space-4) 0;
+}
+
+.osa-stale {
+  font-size: var(--osa-size-micro);
+  color: var(--osa-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--osa-space-1);
+}
+
+.osa-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

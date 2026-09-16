@@ -5,14 +5,19 @@ This project turns Instacart’s existing shelf detection technology into a clos
 This repository currently contains the **domain substrate** — the facing-level model, its
 time-ordered event history, the typed task lifecycle, the Carrot Tags LED lane mapping, the
 availability index, the verification rule, and the gap ranking that decides what gets worked first,
-all as pure, dependency-free domain logic — the **hexagonal boundary** of ports around it, and the
-**application layer** that drives one across the other.
+all as pure, dependency-free domain logic — the **hexagonal boundary** of ports around it, the
+**application layer** that drives one across the other, and — in `web/` — the **store-operations
+dashboard's** state, data models, reporting API clients and shared components.
 
 ```
 npm install
 npm run typecheck   # tsc --noEmit, strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes
 npm test            # vitest
 npm run build       # emits dist/
+
+npm run typecheck:web   # the dashboard workspace, same strictness
+npm run test:web        # vitest + jsdom + testing-library
+npm run dev:web         # the shared-component gallery, on the sample fixtures
 ```
 
 ## The model
@@ -537,6 +542,73 @@ provisioned and another half-provisioned — a worse state than not having start
 check nobody remembers until it is asked for: that the retention horizons outlive the pilot they are
 for, so month one is still reportable in month fourteen.
 
+## The store-operations dashboard (`web/`)
+
+An npm workspace holding what the pilot dashboards are assembled from: the global state, the view
+models, the clients for the reporting endpoints, and the shared metric-card / chart / table /
+status-indicator components. There are no dashboard screens yet — `npm run dev:web` opens a gallery
+that renders every component against the sample fixtures.
+
+It is a client-rendered SPA. There is no server-rendering layer because there is nothing for one to
+do: the dashboard reads the service over the same HTTP reporting endpoints any other consumer would,
+behind an authenticated session, and an SSR hop would only move the same request one server further
+away.
+
+### Its models are written out, and checked against the ports
+
+`web/src/models` restates the read side's shapes rather than importing them, which is the rule the
+ports already follow for their own wire payloads: a published contract must not shift under an
+internal refactor. The cost is duplication, and the payment is
+`web/src/services/contract-conformance.ts` — type-level assertions that fail the build if a report
+gains, loses or renames a field, or if a closed union gains a member. The comparison is on keys and
+members rather than full structural identity, because the two sides brand their ids and instants
+independently: the service holds an `Instant` as epoch millis, the dashboard parses ISO-8601 into its
+own brand. Nothing is imported at runtime; the domain types are `import type` only.
+
+Decoding is hand-written and total (`web/src/services/decode.ts`). A field that is missing or the
+wrong type fails with the dotted path that caused it — `overall.coverage expected ratio, received
+string` — rather than becoming a `NaN%` on a card a store manager then acts on. An unknown member of
+a closed union fails too: the service's unions are closed and a new member is a major version bump,
+so silently dropping one would leave rows missing from a queue with nothing to say so.
+
+### `null` is never zero
+
+The domain's most load-bearing distinction survives all the way to the pixels. `index` is `null` when
+nothing was measured, `labourHours` is `null` when no workforce feed is connected, and
+`resolvedGapRate` is `null` when every detected gap is still inside its verification window. Every
+formatter renders those as `—`, every status grades them `unknown` rather than `good`, and the line
+chart *breaks* rather than drawing through them — a line across an unmeasured bucket asserts an
+observation nobody made.
+
+The figures that need a caveat carry it. A resolved-gap rate ships with the denominator it was
+computed over and the `awaitingVerification` count excluded from it; an availability index ships with
+its coverage, and is graded by whichever of the two is worse, because a 99% index measured over 20%
+of the window is not a 99% index.
+
+### State: a pure reducer, and the races it settles
+
+`web/src/state` is a small store (`useSyncExternalStore` bindings over a plain reducer) rather than a
+state library, because the interesting decisions are all in the reducer:
+
+- **Superseded responses are dropped.** Each slice remembers the id of the request it is waiting on.
+  A slow seven-day query, overtaken by a fast one for today, would otherwise land second and
+  overwrite today's numbers with last week's.
+- **A refresh never blanks a panel.** `AsyncData` keeps the value it is replacing while reloading,
+  and keeps the value it *failed* to replace after an error, labelled stale — a transient 502 must
+  not erase the figure someone was reading.
+- **A scope change resets what it invalidates.** A figure for last week under a header that now says
+  "today" is worse than an empty panel, because it reads as an answer. The live task queues are
+  exempt: they are "what is open now", not a report over the window.
+- **The dashboard's clock is state.** Ages are computed against an explicit tick, so selectors stay
+  pure and a test can assert on a four-hour-old task without waiting four hours.
+
+### Components
+
+Charts are inline SVG, drawn at their measured container width — a stretched `viewBox` scales the
+axis type along with the marks. Categorical hues come from a validated palette in fixed slot order;
+status is always a glyph plus a label, never colour alone, since two of the status steps sit below
+3:1 against the light surface. Every chart has a table view beside it for the same reason.
+
 ## Conventions
 
 - **Pure domain, no IO.** No clock, no database, no network. Instants, ids and policies are passed in,
@@ -568,6 +640,18 @@ src/adapters/outbound/    ESL actuation adapters for the five shelf-edge fleets
 src/adapters/reporting/   the read side behind both read ports and the audit export
 src/platform/             tenancy, encryption, retention, per-retailer data stores, the event
                           bus topology, the DI container, the pilot deployment plan and runtime
-tests/                    unit and integration tests (462), fixtures, in-memory ports, tenant
+tests/                    unit and integration tests (463), fixtures, in-memory ports, tenant
                           and infrastructure doubles, producer payloads under tests/support
+
+web/src/models/           view models: scope, availability, task performance, task queues,
+                          adoption, departmental outcomes, AsyncData, status bands, formatters
+web/src/services/         HTTP client, hand-written decoders, the four reporting clients and
+                          the port conformance checks
+web/src/state/            the store, actions, the reducer, effects, selectors, React bindings
+web/src/components/       metric card, line/bar/sparkline charts, data table, status indicator,
+                          async states, design tokens
+web/src/fixtures/         sample data and a DashboardApi backed by it
+web/src/gallery/          every component rendered in isolation
+web/tests/                98 tests: models, decoders and transport, reducer and effects,
+                          component rendering, and a wired-up integration pass
 ```
