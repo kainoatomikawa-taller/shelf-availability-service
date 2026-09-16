@@ -59,6 +59,18 @@ export class InMemoryFacingRepository implements FacingRepositoryPort {
       .filter((facing): facing is Facing => facing !== undefined);
   }
 
+  /**
+   * Every facing in one partition.
+   *
+   * Not on `FacingRepositoryPort` — the service never needs an unbounded scan —
+   * but a retained read model does, and the integration tests read their reports
+   * off the same store ingestion wrote to rather than off a second copy that
+   * could agree with nothing.
+   */
+  all(retailerId: RetailerId): readonly Facing[] {
+    return [...partitionOf(this.store, retailerId).values()];
+  }
+
   async saveAll(retailerId: RetailerId, facings: readonly Facing[]): Promise<void> {
     this.saveCount += 1;
     const partition = partitionOf(this.store, retailerId);
