@@ -568,6 +568,34 @@ src/adapters/outbound/    ESL actuation adapters for the five shelf-edge fleets
 src/adapters/reporting/   the read side behind both read ports and the audit export
 src/platform/             tenancy, encryption, retention, per-retailer data stores, the event
                           bus topology, the DI container, the pilot deployment plan and runtime
-tests/                    unit and integration tests (462), fixtures, in-memory ports, tenant
-                          and infrastructure doubles, producer payloads under tests/support
+tests/                    unit tests, fixtures, in-memory ports, tenant and infrastructure
+                          doubles and producer payloads under tests/support
+tests/integration/        the suites that run a whole pilot: per source, per ESL vendor, the
+                          closed loop end to end, audit reconstruction, partition isolation
 ```
+
+## Tests
+
+577 tests, `npm test`. Most are unit tests against one module; the five suites under
+`tests/integration` are different in kind, and it is worth saying what they buy.
+
+Each one boots a real pilot through `tests/support/pilot-harness.ts`: a real `planPilotDeployment`,
+a real `startDeployment`, one container and one detection-stream consumer per retailer, the shipped
+source and vendor adapters behind them, and the retailer's actual generated topic names. Only the
+four things this package refuses to depend on are doubles — a store, a broker, a clock and a
+vendor's transport. Nothing is shared between tenants, and reports are read off the same repository
+ingestion wrote to, so "recompute the index from the retained log" compares two things rather than
+a fixture with itself.
+
+| Suite | What it establishes |
+| --- | --- |
+| `detection-sources.integration.test.ts` | Each of the five producers, from its own bytes on its own topic to the stored facing — including the conversions (a void percentage, millimetres, a decimal price, a window) whose absence is a *plausible number* rather than a crash |
+| `esl-vendors.integration.test.ts` | Each of the five fleets, from a detected gap to a lit tag, asserted against the vendor's own request body — with the rung each generation reaches, the degradation below it, and the handheld fallback when the gateway is dark |
+| `closed-loop.e2e.test.ts` | One facing all the way round: detection, gap, ranked worklist, task, shelf-edge expression, the work, two confirming passes, the close, the cleared lane, and the availability record showing exactly the hours the shelf was empty |
+| `audit-reconstruction.test.ts` | The retained log rebuilds the reported index for any measurement period — recomputed by arithmetic that calls nothing from the domain, from a sealed artifact's own bytes, and by replaying the producers' records into an empty second deployment to the same content hash |
+| `partition-isolation.test.ts` | Strict per-retailer isolation at two and at four retailers, including two tenants holding a facing with the same id |
+
+The reconstruction suite is the one with a deadline attached. It proves the index is independently
+recomputable *while the engagement's commercial terms are still a fixed fee* — before anything
+anybody is paid depends on the number. An index only its author can compute is one a retailer takes
+on trust, and that stops being acceptable the moment it underwrites an outcome-linked term.
